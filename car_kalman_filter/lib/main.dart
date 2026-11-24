@@ -32,11 +32,17 @@ class SensorDashboardPage extends StatefulWidget {
 
 class _SensorDashboardPageState extends State<SensorDashboardPage> {
   static const int _maxPoints = 80;
+  static const double _radToDeg = 180.0 / math.pi;
 
   // Accelerometer series (m/s^2)
   final List<FlSpot> _accX = [];
   final List<FlSpot> _accY = [];
   final List<FlSpot> _accZ = [];
+
+  // Derived angle series (degrees): Roll & Pitch from accelerometer, Yaw from magnetometer
+  final List<FlSpot> _rollDeg = [];
+  final List<FlSpot> _pitchDeg = [];
+  final List<FlSpot> _yawDeg = [];
 
   // GPS lat/lon path (x = longitude, y = latitude)
   final List<FlSpot> _gpsPath = [];
@@ -48,16 +54,22 @@ class _SensorDashboardPageState extends State<SensorDashboardPage> {
   final List<FlSpot> _gpsSpeedSpots = [];
 
   StreamSubscription<AccelerometerEvent>? _accSub;
+  StreamSubscription<MagnetometerEvent>? _magSub;
   StreamSubscription<UserAccelerometerEvent>? _userAccSub;
   StreamSubscription<Position>? _posSub;
 
   double _sampleIndex = 0;
+  double _angleSampleIndex = 0;
   double _velSampleIndex = 0;
 
   double _vx = 0;
   double _vy = 0;
   double _vz = 0;
   DateTime? _lastUserAccTime;
+
+  double _latestRoll = 0;
+  double _latestPitch = 0;
+  double _latestYaw = 0;
 
   String _gpsStatus = 'Initializing GPS...';
   double? _latestLat;
@@ -68,6 +80,7 @@ class _SensorDashboardPageState extends State<SensorDashboardPage> {
   void initState() {
     super.initState();
     _startAccelerometer();
+    _startAngles();
     _startVelocityIntegration();
     _startGps();
   }
@@ -77,11 +90,41 @@ class _SensorDashboardPageState extends State<SensorDashboardPage> {
         accelerometerEventStream(
           samplingPeriod: const Duration(milliseconds: 50),
         ).listen((AccelerometerEvent event) {
+          final roll = math.atan2(event.y, event.z) * _radToDeg;
+          final pitch =
+              math.atan2(
+                -event.x,
+                math.sqrt(event.y * event.y + event.z * event.z),
+              ) *
+              _radToDeg;
+
           setState(() {
             final t = _sampleIndex++;
             _addTrimmed(_accX, FlSpot(t, event.x));
             _addTrimmed(_accY, FlSpot(t, event.y));
             _addTrimmed(_accZ, FlSpot(t, event.z));
+
+            _latestRoll = roll;
+            _latestPitch = pitch;
+            final at = _angleSampleIndex++;
+            _addTrimmed(_rollDeg, FlSpot(at, _latestRoll));
+            _addTrimmed(_pitchDeg, FlSpot(at, _latestPitch));
+            _addTrimmed(_yawDeg, FlSpot(at, _latestYaw));
+          });
+        });
+  }
+
+  void _startAngles() {
+    _magSub =
+        magnetometerEventStream(
+          samplingPeriod: const Duration(milliseconds: 50),
+        ).listen((MagnetometerEvent event) {
+          // Compass heading in degrees [0, 360) in the XY plane
+          var yaw = math.atan2(event.y, event.x) * _radToDeg;
+          if (yaw < 0) yaw += 360.0;
+
+          setState(() {
+            _latestYaw = yaw;
           });
         });
   }
@@ -95,12 +138,10 @@ class _SensorDashboardPageState extends State<SensorDashboardPage> {
           if (_lastUserAccTime != null) {
             final dt = now.difference(_lastUserAccTime!).inMicroseconds / 1e6;
             if (dt > 0 && dt < 1.0) {
-              // Small deadband to suppress stationary accelerometer noise
               final ax = event.x.abs() < 0.08 ? 0.0 : event.x;
               final ay = event.y.abs() < 0.08 ? 0.0 : event.y;
               final az = event.z.abs() < 0.08 ? 0.0 : event.z;
 
-              // Light damping reduces long-term integration drift
               const damping = 0.985;
               _vx = (_vx + ax * dt) * damping;
               _vy = (_vy + ay * dt) * damping;
@@ -184,6 +225,7 @@ class _SensorDashboardPageState extends State<SensorDashboardPage> {
   @override
   void dispose() {
     _accSub?.cancel();
+    _magSub?.cancel();
     _userAccSub?.cancel();
     _posSub?.cancel();
     super.dispose();
@@ -231,6 +273,23 @@ class _SensorDashboardPageState extends State<SensorDashboardPage> {
                 _series(_accX, Colors.red),
                 _series(_accY, Colors.green),
                 _series(_accZ, Colors.blue),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          _PlotCard(
+            title: 'Angles (deg)',
+            subtitle: 'Roll & Pitch (acc) + Yaw (mag)',
+            legend: const [
+              _LegendItem(color: Colors.deepOrange, label: 'Roll'),
+              _LegendItem(color: Colors.indigo, label: 'Pitch'),
+              _LegendItem(color: Colors.pink, label: 'Yaw'),
+            ],
+            child: _buildLineChart(
+              lines: [
+                _series(_rollDeg, Colors.deepOrange),
+                _series(_pitchDeg, Colors.indigo),
+                _series(_yawDeg, Colors.pink),
               ],
             ),
           ),
