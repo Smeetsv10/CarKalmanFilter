@@ -22,15 +22,11 @@ jobs:
           channel: stable
 
       - name: Install dependencies
-        defaults:
-          run:
-            working-directory: car_kalman_filter
+        working-directory: car_kalman_filter
         run: flutter pub get
 
       - name: Build web release
-        defaults:
-          run:
-            working-directory: car_kalman_filter
+        working-directory: car_kalman_filter
         run: flutter build web --release --base-href "/${{ github.event.repository.name }}/"
 
       - name: Deploy to gh-pages branch
